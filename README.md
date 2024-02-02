@@ -23,7 +23,7 @@ pip install -r requirements.txt
 
 ### 環境変数の設定
 
-必要に応じて、.envファイルや環境変数を設定します。
+`.env.example` を `.env` にコピーして内容を修正します。
 
 ### ローカルでのテスト
 
