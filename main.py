@@ -1,5 +1,6 @@
 import os
 import sys
+import requests
 import praw
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -67,12 +68,25 @@ def get_hot_posts_with_comments(subreddit_name, limit=10):
 
     return all_posts_text
 
+def send_message(text):
+    webhook_url = os.getenv("SLACK_WEBHOOK_URL")
+    payload = {
+        "text": text
+    }
+    response = requests.post(webhook_url, json=payload)
+    if response.status_code == 200:
+        print("メッセージが送信されました")
+    else:
+        print(f"エラーが発生しました: {response.status_code}: {response.text}")
+
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         subreddit_name = sys.argv[1]
         all_posts_text = get_hot_posts_with_comments(subreddit_name)
+        print(all_posts_text)
         summary = summarize_text(subreddit_name, all_posts_text)
-        print(f"要約:\n{summary}")
+        print(summary)
+        send_message(summary)
     else:
         print("Subreddit名をコマンドライン引数として指定してください。")
         sys.exit(1)
