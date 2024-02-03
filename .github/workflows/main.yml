@@ -8,7 +8,12 @@ on:
 jobs:
   run-script:
     runs-on: ubuntu-latest
-
+    env:
+      REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+      REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+      REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -24,4 +29,4 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run script
-        run: python main.py
+        run: python main.py ChatGPT
