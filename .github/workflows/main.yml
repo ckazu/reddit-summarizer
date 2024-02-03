@@ -1,14 +1,15 @@
-name: Daily Reddit Summarizer
+name: Reddit Summarizer Scheduler
 
 on:
   schedule:
-    - cron: "0 9 * * *"
+    - cron: "0 3 * * *" # 12時
+    - cron: "0 10 * * *" # 19時
+
   workflow_dispatch:
 
 jobs:
-  run-script:
+  post-subreddit-info:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -23,5 +24,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run script
-        run: python main.py
+      - name: Determine subreddit based on day of the week and time
+        run: |
+          HOUR=$(date +%H)
+          DAY_NUM=$(date +%u)
+          if [ "$HOUR" -eq 3 ]; then
+            SUBREDDITS=("GameDev", "ChatGPT" "OpenAI" "StableDiffusion" "ArtificialInteligence" "anime" "videogames")
+          elif [ "$HOUR" -eq 10 ]; then
+            SUBREDDITS=("Unity3d" "IndieDev" "csharp" "ruby" "Python" "nextjs" "fountainpens")
+          else
+            SUBREDDITS=("Tokyo" "Tokyo" "Tokyo" "Tokyo" "Tokyo" "Tokyo" "Tokyo")
+          fi
+          SUBREDDIT=${SUBREDDITS[$((DAY_NUM-1))]}
+          echo "SUBREDDIT=$SUBREDDIT" >> $GITHUB_ENV
+
+      - name: Run script with subreddit
+        run: python main.py $SUBREDDIT
+        env:
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
