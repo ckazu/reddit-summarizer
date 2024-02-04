@@ -28,7 +28,7 @@ jobs:
         run: |
           HOUR=$(date +%H)
           DAY_NUM=$(date +%u)
-          if [ "$HOUR" -eq 3 ]; then
+          if [ "$HOUR" -eq 4 ]; then
             SUBREDDITS=("GameDev", "ChatGPT" "OpenAI" "StableDiffusion" "ArtificialInteligence" "anime" "videogames")
           elif [ "$HOUR" -eq 10 ]; then
             SUBREDDITS=("Unity3d" "IndieDev" "csharp" "ruby" "Python" "nextjs" "fountainpens")
