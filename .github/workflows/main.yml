@@ -2,8 +2,8 @@ name: Reddit Summarizer Scheduler
 
 on:
   schedule:
-    - cron: "0 3 * * *" # 12時
-    - cron: "0 10 * * *" # 19時
+    - cron: "0 4 * * *" # 13:00 JST
+    - cron: "0 10 * * *" # 19:00 JST
 
   workflow_dispatch:
 
