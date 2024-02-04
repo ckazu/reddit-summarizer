@@ -81,10 +81,10 @@ def get_hot_posts_with_comments(subreddit_name, limit=10):
         user_agent=reddit_user_agent,
     )
     subreddit = reddit.subreddit(subreddit_name)
-    best_posts = list(subreddit.top(limit=limit, time_filter="week"))
-    # hot_posts = list(subreddit.hot(limit=limit))
+    # best_posts = list(subreddit.top(limit=limit, time_filter="week"))
+    hot_posts = list(subreddit.hot(limit=limit, time_filter="week"))
 
-    all_posts = best_posts # + hot_posts
+    all_posts = hot_posts # + best_posts
 
     all_posts_text = ""
     for post in all_posts:
