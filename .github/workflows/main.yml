@@ -29,9 +29,9 @@ jobs:
           HOUR=$(date +%H)
           DAY_NUM=$(date +%u)
           if [ "$HOUR" -eq 4 ]; then
-            SUBREDDITS=("GameDev", "ChatGPT" "OpenAI" "StableDiffusion" "ArtificialInteligence" "anime" "videogames")
+            SUBREDDITS=(${{ secrets.SUBREDDITS_MORNING }})
           elif [ "$HOUR" -eq 10 ]; then
-            SUBREDDITS=("Unity3d" "IndieDev" "csharp" "ruby" "Python" "nextjs" "fountainpens")
+            SUBREDDITS=(${{ secrets.SUBREDDITS_EVENING }})
           else
             SUBREDDITS=("Tokyo" "Tokyo" "Tokyo" "Tokyo" "Tokyo" "Tokyo" "Tokyo")
           fi
