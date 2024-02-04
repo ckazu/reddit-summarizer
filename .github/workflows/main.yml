@@ -2,14 +2,42 @@ name: Reddit Summarizer Scheduler
 
 on:
   schedule:
-    - cron: "0 4 * * *" # 13:00 JST
-    - cron: "0 10 * * *" # 19:00 JST
+    - cron: "0 * * * *"
 
   workflow_dispatch:
 
 jobs:
+  check-report-times:
+    runs-on: ubuntu-latest
+    outputs:
+      should-run: ${{ steps.check_times.outputs.should-run }}
+    steps:
+      - name: Determine if report times are set and match current time
+        id: check_times
+        run: |
+          CURRENT_HOUR=$(date -u +'%-H')
+          echo "current hour: $CURRENT_HOUR"
+          echo "REPORT_TIME_MORNING_UTC: $REPORT_TIME_MORNING_UTC"
+          echo "REPORT_TIME_EVENING_UTC: $REPORT_TIME_EVENING_UTC"
+
+          if [ -z "${{ env.REPORT_TIME_MORNING_UTC }}" ] && [ -z "${{ env.REPORT_TIME_EVENING_UTC }}" ]; then
+            echo "Report times are not set."
+            echo "should-run=false" >> $GITHUB_OUTPUT
+          elif [ "$CURRENT_HOUR" != "${{ env.REPORT_TIME_MORNING_UTC }}" ] && [ "$CURRENT_HOUR" != "${{ env.REPORT_TIME_EVENING_UTC }}" ]; then
+            echo "Current time does not match report times."
+            echo "should-run=false" >> $GITHUB_OUTPUT
+          else
+            echo "Report times are set and match current time."
+            echo "should-run=true" >> $GITHUB_OUTPUT
+          fi
+        env:
+          REPORT_TIME_MORNING_UTC: ${{ vars.REPORT_TIME_MORNING_UTC }}
+          REPORT_TIME_EVENING_UTC: ${{ vars.REPORT_TIME_EVENING_UTC }}
+
   post-subreddit-info:
     runs-on: ubuntu-latest
+    needs: check-report-times
+    if: needs.check-report-times.outputs.should-run == 'true'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -26,20 +54,30 @@ jobs:
 
       - name: Determine subreddit based on day of the week and time
         run: |
-          HOUR=$(date +%H)
+          HOUR=$(date +%-H)
           DAY_NUM=$(date +%u)
-          if [ "$HOUR" -eq 4 ]; then
-            SUBREDDITS=(${{ secrets.SUBREDDITS_MORNING }})
-          elif [ "$HOUR" -eq 10 ]; then
-            SUBREDDITS=(${{ secrets.SUBREDDITS_EVENING }})
+          if [ "$HOUR" -eq "${{ env.REPORT_TIME_MORNING_UTC }}" ]; then
+            IFS=' ' read -r -a SUBREDDITS <<< "$SUBREDDITS_MORNING"
+          elif [ "$HOUR" -eq "${{ env.REPORT_TIME_EVENING_UTC }}" ]; then
+            IFS=' ' read -r -a SUBREDDITS <<< "$SUBREDDITS_EVENING"
           else
             SUBREDDITS=("Tokyo" "Tokyo" "Tokyo" "Tokyo" "Tokyo" "Tokyo" "Tokyo")
           fi
+
+          echo ${SUBREDDITS[*]}
           SUBREDDIT=${SUBREDDITS[$((DAY_NUM-1))]}
-          echo "SUBREDDIT=$SUBREDDIT" >> $GITHUB_ENV
+          echo $SUBREDDIT
+          echo "SUBREDDIT=${SUBREDDIT}" >> $GITHUB_ENV
+        env:
+          REPORT_TIME_MORNING_UTC: ${{ vars.REPORT_TIME_MORNING_UTC }}
+          REPORT_TIME_EVENING_UTC: ${{ vars.REPORT_TIME_EVENING_UTC }}
+          SUBREDDITS_MORNING: ${{ vars.SUBREDDITS_MORNING }}
+          SUBREDDITS_EVENING: ${{ vars.SUBREDDITS_EVENING }}
 
       - name: Run script with subreddit
-        run: python main.py $SUBREDDIT
+        run: |
+          echo $SUBREDDIT
+          python main.py $SUBREDDIT
         env:
           REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
