@@ -73,6 +73,7 @@ jobs:
           REPORT_TIME_EVENING_UTC: ${{ vars.REPORT_TIME_EVENING_UTC }}
           SUBREDDITS_MORNING: ${{ vars.SUBREDDITS_MORNING }}
           SUBREDDITS_EVENING: ${{ vars.SUBREDDITS_EVENING }}
+          CONVERSATION_LENGTH: ${{ vars.CONVERSATION_LENGTH }}
 
       - name: Run script with subreddit
         run: |
