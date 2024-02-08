@@ -9,9 +9,12 @@ from dotenv import load_dotenv
 # .envファイルから環境変数を読み込む
 load_dotenv()
 
-def summarize_text(subreddit, text):
+def summarize_text(subreddit, text, conversation_length=5):
     openai_api_key = os.getenv("OPENAI_API_KEY")
     client = OpenAI(api_key=openai_api_key)
+
+    if os.getenv("CONVERSATION_LENGTH"):
+        conversation_length = int(os.getenv("CONVERSATION_LENGTH"))
 
     response = client.chat.completions.create(
         model="gpt-4-0125-preview",
@@ -21,7 +24,7 @@ def summarize_text(subreddit, text):
             {"role": "system", "content": "これから提示する会話ログの全件を一件ずつ処理してください。"},
             {"role": "system", "content": "会話は、ずんだもん（ずんだもん）と四国めたん（めたん）、東北きりたん（きりたん）による会話形式で紹介します。会話の順番は同じにならないようにトピックごとにランダムに変更してください。"},
             {"role": "system", "content": "地の文は必要ありません。会話のみで構成してください。"},
-            {"role": "system", "content": "ひとつのトピックにつき、6 回以上の発言をしてください。"},
+            {"role": "system", "content": f"ひとつのトピックにつき、{conversation_length} 回以上の発言をしてください。"},
             {"role": "system", "content": "トピックとトピックの間には、区切りを入れます。区切りの行には、トピックの「タイトル」とトピックの「Reddit URL」を付与してください。"},
             {"role": "system", "content": f"""ずんだもんの特徴を指示します。 **これは最も重要な指示です。** 次の特徴を必ず守ってください。
                                             ずんだもんは、ずんだ餅の妖精です。
@@ -48,17 +51,15 @@ def summarize_text(subreddit, text):
                                             URL: https://...
                                             発言者: 発話1
                                             発言者: 発話2
-                                            発言者: 発話3
-                                            発言者: 発話4
-                                            発言者: 発話5
+                                            ...
+                                            発言者: 発話{conversation_length}
                                             ---
                                             タイトル: 「reddit のタイトル」
                                             URL: https://...
                                             発言者: 発話1
                                             発言者: 発話2
-                                            発言者: 発話3
-                                            発言者: 発話4
-                                            発言者: 発話5
+                                            ...
+                                            発言者: 発話{conversation_length}
                                             ---
                                             <すべてのトピックについての会話形式で紹介を続ける。>
                                             ---
