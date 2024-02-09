@@ -126,7 +126,9 @@ def send_message(text):
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         subreddit_name = sys.argv[1]
-        all_posts_text = get_hot_posts_with_comments(subreddit_name)
+        limit = int(sys.argv[2]) if len(sys.argv) > 2 else 3
+
+        all_posts_text = get_hot_posts_with_comments(subreddit_name, limit)
         print(all_posts_text)
         summary = summarize_text(subreddit_name, all_posts_text)
         print(summary)
