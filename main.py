@@ -183,15 +183,26 @@ class CohereChatClient(AIClient):
 
 class SlackNotifier:
     def __init__(self):
-        self.webhook_url = os.getenv("SLACK_WEBHOOK_URL")
+        self.token = os.getenv("SLACK_BOT_TOKEN")
+        self.channel = os.getenv("SLACK_CHANNEL")
+        self.url = "https://slack.com/api/chat.postMessage"
 
-    def send_message(self, text):
-        payload = {"text": text}
-        response = requests.post(self.webhook_url, json=payload)
-        if response.status_code == 200:
-            print("メッセージが送信されました")
+    def send_message(self, text, thread_ts=None):
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "channel": self.channel,
+            "text": text,
+            "thread_ts": thread_ts,
+        }
+        response = requests.post(self.url, headers=headers, json=payload)
+        if response.status_code == 200 and response.json()["ok"]:
+            return response.json()["ts"]
         else:
             print(f"エラーが発生しました: {response.status_code}: {response.text}")
+            return None
 
 
 class Application:
@@ -215,7 +226,8 @@ class Application:
         summary = self.ai_client.summarize_text(subreddit_name, all_posts_text)
         print(summary)
 
-        self.slack_notifier.send_message(summary)
+        thread_ts = self.slack_notifier.send_message(f"今週の r/{subreddit_name}", None)
+        self.slack_notifier.send_message(summary, thread_ts)
 
 
 if __name__ == "__main__":
