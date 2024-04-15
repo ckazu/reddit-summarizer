@@ -1,5 +1,6 @@
 import os
 import sys
+from abc import ABC, abstractmethod
 from datetime import datetime
 import requests
 import praw
@@ -36,11 +37,7 @@ class RedditClient:
         return all_posts_text
 
 
-class OpenAIChatClient:
-    def __init__(self):
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        self.model = os.getenv("LLM_MODEL")
-
+class AIClient(ABC):
     def build_messages(self, subreddit, text):
         if os.getenv("CONVERSATION_LENGTH"):
             conversation_length = int(os.getenv("CONVERSATION_LENGTH"))
@@ -134,6 +131,16 @@ class OpenAIChatClient:
             {"role": "user", "content": text},
         ]
 
+    @abstractmethod
+    def summarize_text(self, subreddit, text):
+        pass
+
+
+class OpenAIChatClient(AIClient):
+    def __init__(self):
+        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.model = os.getenv("AI_MODEL")
+
     def summarize_text(self, subreddit, text):
         messages = self.build_messages(subreddit, text)
         response = self.client.chat.completions.create(
@@ -157,8 +164,12 @@ class SlackNotifier:
 
 class Application:
     def __init__(self):
+        ai_engine = os.getenv("AI_ENGINE", "openai")
+        if ai_engine == "openai":
+            self.ai_client = OpenAIChatClient()
+        else:
+            raise ValueError(f"Unsupported AI engine: {ai_engine}")
         self.reddit_client = RedditClient()
-        self.openai_client = OpenAIChatClient()
         self.slack_notifier = SlackNotifier()
 
     def run(self, subreddit_name, limit):
@@ -167,7 +178,7 @@ class Application:
         )
         print(all_posts_text)
 
-        summary = self.openai_client.summarize_text(subreddit_name, all_posts_text)
+        summary = self.ai_client.summarize_text(subreddit_name, all_posts_text)
         print(summary)
 
         self.slack_notifier.send_message(summary)
