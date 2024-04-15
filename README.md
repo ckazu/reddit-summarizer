@@ -5,7 +5,7 @@
 ### 要件
 
 * Python 3.7以上
-* gcloud
+* (option) github actions
 
 ### Python仮想環境の作成とアクティベート
 
@@ -27,14 +27,8 @@ pip install -r requirements.txt
 
 ### ローカルでのテスト
 
-ローカルで関数をテストするには、 `local_test.py` ファイルを実行します。
+ローカルで関数をテストするには、 `main.py` ファイルを実行します。
 
 ```bash
-python local_test.py
-```
-
-## デプロイ
-
-```bash
-gcloud functions deploy [関数名] --runtime python39 --trigger-http --allow-unauthenticated
+python main.py <subreddit名>
 ```
