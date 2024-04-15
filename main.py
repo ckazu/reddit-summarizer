@@ -1,32 +1,81 @@
 import os
-import sys
-from datetime import datetime
-import requests
 import praw
+import requests
+import sys
+from abc import ABC, abstractmethod
+from datetime import datetime
+
+# ai engine support
+import cohere
 from openai import OpenAI
+
+# dotenv support
 from dotenv import load_dotenv
 
-# .envファイルから環境変数を読み込む
 load_dotenv()
 
-def summarize_text(subreddit, text, conversation_length=5):
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    client = OpenAI(api_key=openai_api_key)
 
-    if os.getenv("CONVERSATION_LENGTH"):
-        conversation_length = int(os.getenv("CONVERSATION_LENGTH"))
+class RedditClient:
+    def __init__(self):
+        self.reddit = praw.Reddit(
+            client_id=os.getenv("REDDIT_CLIENT_ID"),
+            client_secret=os.getenv("REDDIT_CLIENT_SECRET"),
+            user_agent=os.getenv("REDDIT_USER_AGENT"),
+        )
 
-    response = client.chat.completions.create(
-        model="gpt-4-0125-preview",
-        messages=[
+    def get_hot_posts_with_comments(self, subreddit_name, limit=3, time_filter="week"):
+        subreddit = self.reddit.subreddit(subreddit_name)
+        best_posts = list(subreddit.top(limit=limit, time_filter=time_filter))
+        all_posts_text = ""
+        for post in best_posts:
+            post_date = datetime.utcfromtimestamp(post.created_utc)
+            post_text = f"タイトル: {post.title}\nURL: {post.url}\n投稿日時: {post_date:%Y/%m/%d %H:%M:%S}\n"
+            post_text += f"スコア: {post.score}\nコメント数: {post.num_comments}\n本文:\n{post.selftext}\n"
+            comments = post.comments
+            comment_list = [
+                comment.body
+                for comment in comments
+                if isinstance(comment, praw.models.Comment)
+            ]
+            post_text += "コメントリスト:\n" + "\n".join(comment_list)
+            all_posts_text += post_text + "\n\n"
+        return all_posts_text
+
+
+class AIClient(ABC):
+    def build_common_messages(self, subreddit, text):
+        conversation_length = 15
+        if os.getenv("CONVERSATION_LENGTH"):
+            conversation_length = int(os.getenv("CONVERSATION_LENGTH"))
+        return [
             # {"role": "system", "content": "次の情報からホットトピックを最大 10 件選定し、それぞれに対してどういう内容でどういうコメントがあるか日本語で要約してください。要約は3文程度にまとめますが、短すぎないようにしてください。また、タイトルとURLの情報も付与してください。この要約は、Slack に投稿されます。"},
-            {"role": "system", "content": "Reddit のホットトピックの情報をこれから提示します。トピック本文とコメントから、全体の概要を要約し、どのような議論が行われているかを日本語で会話形式で紹介します。"},
-            {"role": "system", "content": "これから提示する会話ログの全件を一件ずつ処理してください。"},
-            {"role": "system", "content": "会話は、ずんだもん（ずんだもん）と四国めたん（めたん）、東北きりたん（きりたん）による会話形式で紹介します。会話の順番は同じにならないようにトピックごとにランダムに変更してください。"},
-            {"role": "system", "content": "地の文は必要ありません。会話のみで構成してください。"},
-            {"role": "system", "content": f"ひとつのトピックにつき、{conversation_length} 回以上の発言をしてください。"},
-            {"role": "system", "content": "トピックとトピックの間には、区切りを入れます。区切りの行には、トピックの「タイトル」とトピックの「Reddit URL」を付与してください。"},
-            {"role": "system", "content": f"""ずんだもんの特徴を指示します。 **これは最も重要な指示です。** 次の特徴を必ず守ってください。
+            {
+                "role": "system",
+                "content": "Reddit のホットトピックの情報をこれから提示します。トピック本文とコメントから、全体の概要を要約し、どのような議論が行われているかを日本語で会話形式で紹介します。",
+            },
+            {
+                "role": "system",
+                "content": "これから提示する会話ログの全件を一件ずつ処理してください。",
+            },
+            {
+                "role": "system",
+                "content": "会話は、ずんだもん（ずんだもん）と四国めたん（めたん）、東北きりたん（きりたん）による会話形式で紹介します。会話の順番は同じにならないようにトピックごとにランダムに変更してください。",
+            },
+            {
+                "role": "system",
+                "content": "地の文は必要ありません。会話のみで構成してください。",
+            },
+            {
+                "role": "system",
+                "content": f"ひとつのトピックにつき、{conversation_length} 回以上の発言をしてください。",
+            },
+            {
+                "role": "system",
+                "content": "トピックとトピックの間には、区切りを入れます。区切りの行には、トピックの「タイトル」とトピックの「Reddit URL」を付与してください。",
+            },
+            {
+                "role": "system",
+                "content": f"""ずんだもんの特徴を指示します。 **これは最も重要な指示です。** 次の特徴を必ず守ってください。
                                             ずんだもんは、ずんだ餅の妖精です。
                                             一人称は「ボク」です。
                                             必ず語尾に「〜のだ」や「〜なのだ」とつけて話します。例:「わかったのだ」「大好きなのだ」。
@@ -34,17 +83,35 @@ def summarize_text(subreddit, text, conversation_length=5):
                                             「だよ。」「なのだよ。」という表現は禁止します。
                                             みだりに！はつけません。
                                             「ごめん」は「ごめんなのだ」とします。
-                                            「かな？」は使用しません。例:「質問はあるかな？」は「質問はあるのだ？」とします。"""},
-            {"role": "system", "content": f"""めたんの特徴を指示します。めたんは良家のお嬢様でした。
+                                            「かな？」は使用しません。例:「質問はあるかな？」は「質問はあるのだ？」とします。""",
+            },
+            {
+                "role": "system",
+                "content": f"""めたんの特徴を指示します。めたんは良家のお嬢様でした。
                                             基本的にはタメ口ですが、元お嬢様らしく「〜でしょう」などといった言い回しをします。
                                             「〜かしら。」「〜わね。」「〜わよ。」「〜なのよ。」などの語尾を使います。
-                                            たまに厨二病な発言をします。"""},
-            {"role": "system", "content": f"""きりたんの特徴を指示します。
-                                            きりたんは11歳の女性ですが、しっかり者です。丁寧な言葉遣いをします。"""},
-            {"role": "system", "content": f"最初の発言は、「めたん: 今週の r/{subreddit} (https://www.reddit.com/r/{subreddit}/) で話題になっているトピックを紹介していくわ」で始めます。"},
-            {"role": "system", "content": "最後の発言は、ずんだもんがオチをつけて終わります。"},
-            {"role": "system", "content": "会話の作成が完了したら、改めてこれまでの条件にあっているかを確認して会話を修正してください。特に、話し方が指示に則っていることをチェックしてください。特に URL が付与されていることを確認してください。このブラッシュアップの作業を二度行ってください。"},
-            {"role": "system", "content": f"""レスポンスは以下の形式で作成してください。
+                                            たまに厨二病な発言をします。""",
+            },
+            {
+                "role": "system",
+                "content": f"""きりたんの特徴を指示します。
+                                            きりたんは11歳の女性ですが、しっかり者です。丁寧な言葉遣いをします。""",
+            },
+            {
+                "role": "system",
+                "content": f"最初の発言は、「めたん: 今週の r/{subreddit} (https://www.reddit.com/r/{subreddit}/) で話題になっているトピックを紹介していくわ」で始めます。",
+            },
+            {
+                "role": "system",
+                "content": "最後の発言は、ずんだもんがオチをつけて終わります。",
+            },
+            {
+                "role": "system",
+                "content": "会話の作成が完了したら、改めてこれまでの条件にあっているかを確認して会話を修正してください。特に、話し方が指示に則っていることをチェックしてください。特に URL が付与されていることを確認してください。このブラッシュアップの作業を二度行ってください。",
+            },
+            {
+                "role": "system",
+                "content": f"""レスポンスは以下の形式で作成してください。
                                             めたん: 今週の r/{subreddit} (https://www.reddit.com/r/{subreddit}/) で話題になっているトピックを紹介していくわ。
                                             ---
                                             タイトル: 「reddit のタイトル」
@@ -64,75 +131,100 @@ def summarize_text(subreddit, text, conversation_length=5):
                                             <すべてのトピックについての会話形式で紹介を続ける。>
                                             ---
                                             ずんだもん: <最後のオチをつける。>
-                                            """},
-            {"role": "user", "content": text}
+                                            """,
+            },
+            {"role": "user", "content": text},
         ]
-    )
 
-    return response.choices[0].message.content
+    @abstractmethod
+    def summarize_text(self, subreddit, text):
+        pass
 
-def get_hot_posts_with_comments(subreddit_name, limit=3, time_filter="week"):
-    reddit_client_id = os.getenv("REDDIT_CLIENT_ID")
-    reddit_client_secret = os.getenv("REDDIT_CLIENT_SECRET")
-    reddit_user_agent = os.getenv("REDDIT_USER_AGENT")
 
-    reddit = praw.Reddit(
-        client_id=reddit_client_id,
-        client_secret=reddit_client_secret,
-        user_agent=reddit_user_agent,
-    )
-    subreddit = reddit.subreddit(subreddit_name)
-    best_posts = list(subreddit.top(limit=limit, time_filter=time_filter))
-    # hot_posts = list(subreddit.hot(limit=limit))
+class OpenAIChatClient(AIClient):
+    def __init__(self):
+        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.model = os.getenv("AI_MODEL")
 
-    all_posts = best_posts
+    def build_messages(self, subreddit, text):
+        return self.build_common_messages(subreddit, text)
 
-    all_posts_text = ""
-    for post in all_posts:
-        post_date = datetime.utcfromtimestamp(post.created_utc)
+    def summarize_text(self, subreddit, text):
+        messages = self.build_messages(subreddit, text)
+        response = self.client.chat.completions.create(
+            model=self.model, messages=messages
+        )
+        return response.choices[0].message.content
 
-        # 各投稿の情報を結合
-        post_text = f"タイトル: {post.title}\n"
-        post_text += f"URL: {post.url}\n"
-        post_text += f"投稿日時: {post_date:%Y/%m/%d %H:%M:%S}\n"
-        post_text += f"スコア: {post.score}\n"
-        post_text += f"コメント数: {post.num_comments}\n"
-        post_text += f"本文:\n{post.selftext}\n"
-        print(post_text)
 
-        # コメントリストを取得して結合
-        comments = post.comments
-        comment_list = []
-        for comment in comments:
-            if isinstance(comment, praw.models.Comment):
-                comment_list.append(comment.body)
+class CohereChatClient(AIClient):
+    def __init__(self):
+        self.api_key = os.getenv("COHERE_API_KEY")
+        self.client = cohere.Client(self.api_key)
+        self.model = os.getenv("AI_MODEL")
 
-        post_text += "コメントリスト:\n" + "\n".join(comment_list)
-        all_posts_text += post_text + "\n\n"
+    def build_messages(self, subreddit, text):
+        common_messages = self.build_common_messages(subreddit, text)
+        modified_messages = [
+            {"role": msg["role"], "text": msg["content"]} for msg in common_messages
+        ]
+        return modified_messages
 
-    return all_posts_text
+    def summarize_text(self, subreddit, text):
+        messages = self.build_messages(subreddit, text)
+        response = self.client.chat(
+            model=self.model,
+            chat_history=messages,
+            message="指示に従って要約してください",
+            temperature=1.0,
+        )
+        return response.text
 
-def send_message(text):
-    webhook_url = os.getenv("SLACK_WEBHOOK_URL")
-    payload = {
-        "text": text
-    }
-    response = requests.post(webhook_url, json=payload)
-    if response.status_code == 200:
-        print("メッセージが送信されました")
-    else:
-        print(f"エラーが発生しました: {response.status_code}: {response.text}")
+
+class SlackNotifier:
+    def __init__(self):
+        self.webhook_url = os.getenv("SLACK_WEBHOOK_URL")
+
+    def send_message(self, text):
+        payload = {"text": text}
+        response = requests.post(self.webhook_url, json=payload)
+        if response.status_code == 200:
+            print("メッセージが送信されました")
+        else:
+            print(f"エラーが発生しました: {response.status_code}: {response.text}")
+
+
+class Application:
+    def __init__(self):
+        ai_engine = os.getenv("AI_ENGINE", "openai")
+        if ai_engine == "openai":
+            self.ai_client = OpenAIChatClient()
+        elif ai_engine == "cohere":
+            self.ai_client = CohereChatClient()
+        else:
+            raise ValueError(f"Unsupported AI engine: {ai_engine}")
+        self.reddit_client = RedditClient()
+        self.slack_notifier = SlackNotifier()
+
+    def run(self, subreddit_name, limit):
+        all_posts_text = self.reddit_client.get_hot_posts_with_comments(
+            subreddit_name, limit
+        )
+        print(all_posts_text)
+
+        summary = self.ai_client.summarize_text(subreddit_name, all_posts_text)
+        print(summary)
+
+        self.slack_notifier.send_message(summary)
+
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         subreddit_name = sys.argv[1]
         limit = int(sys.argv[2]) if len(sys.argv) > 2 else 3
 
-        all_posts_text = get_hot_posts_with_comments(subreddit_name, limit)
-        print(all_posts_text)
-        summary = summarize_text(subreddit_name, all_posts_text)
-        print(summary)
-        send_message(summary)
+        app = Application()
+        app.run(subreddit_name, limit)
     else:
         print("Subreddit名をコマンドライン引数として指定してください。")
         sys.exit(1)
