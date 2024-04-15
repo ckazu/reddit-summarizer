@@ -1,10 +1,15 @@
 import os
+import praw
+import requests
 import sys
 from abc import ABC, abstractmethod
 from datetime import datetime
-import requests
-import praw
+
+# ai engine support
+import cohere
 from openai import OpenAI
+
+# dotenv support
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -38,10 +43,10 @@ class RedditClient:
 
 
 class AIClient(ABC):
-    def build_messages(self, subreddit, text):
+    def build_common_messages(self, subreddit, text):
+        conversation_length = 15
         if os.getenv("CONVERSATION_LENGTH"):
             conversation_length = int(os.getenv("CONVERSATION_LENGTH"))
-
         return [
             # {"role": "system", "content": "次の情報からホットトピックを最大 10 件選定し、それぞれに対してどういう内容でどういうコメントがあるか日本語で要約してください。要約は3文程度にまとめますが、短すぎないようにしてください。また、タイトルとURLの情報も付与してください。この要約は、Slack に投稿されます。"},
             {
@@ -141,12 +146,39 @@ class OpenAIChatClient(AIClient):
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.model = os.getenv("AI_MODEL")
 
+    def build_messages(self, subreddit, text):
+        return self.build_common_messages(subreddit, text)
+
     def summarize_text(self, subreddit, text):
         messages = self.build_messages(subreddit, text)
         response = self.client.chat.completions.create(
             model=self.model, messages=messages
         )
         return response.choices[0].message.content
+
+
+class CohereChatClient(AIClient):
+    def __init__(self):
+        self.api_key = os.getenv("COHERE_API_KEY")
+        self.client = cohere.Client(self.api_key)
+        self.model = os.getenv("AI_MODEL")
+
+    def build_messages(self, subreddit, text):
+        common_messages = self.build_common_messages(subreddit, text)
+        modified_messages = [
+            {"role": msg["role"], "text": msg["content"]} for msg in common_messages
+        ]
+        return modified_messages
+
+    def summarize_text(self, subreddit, text):
+        messages = self.build_messages(subreddit, text)
+        response = self.client.chat(
+            model=self.model,
+            chat_history=messages,
+            message="指示に従って要約してください",
+            temperature=1.0,
+        )
+        return response.text
 
 
 class SlackNotifier:
@@ -167,6 +199,8 @@ class Application:
         ai_engine = os.getenv("AI_ENGINE", "openai")
         if ai_engine == "openai":
             self.ai_client = OpenAIChatClient()
+        elif ai_engine == "cohere":
+            self.ai_client = CohereChatClient()
         else:
             raise ValueError(f"Unsupported AI engine: {ai_engine}")
         self.reddit_client = RedditClient()
