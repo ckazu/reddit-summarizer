@@ -8,6 +8,7 @@ from datetime import datetime
 # ai engine support
 import cohere
 from openai import OpenAI
+import google.generativeai as genai
 
 # dotenv support
 from dotenv import load_dotenv
@@ -168,6 +169,21 @@ class CohereChatClient(AIClient):
         return response.text
 
 
+class GeminiChatClient(AIClient):
+    def __init__(self):
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        self.model = genai.GenerativeModel(os.getenv("AI_MODEL"))
+
+    def build_messages(self, subreddit, text):
+        return self.build_common_messages(subreddit, text)
+
+    def summarize_text(self, subreddit, text):
+        messages = self.build_messages(subreddit, text)
+        plain_prompt = " ".join([msg["content"] for msg in messages])
+        response = self.model.generate_content(plain_prompt)
+        return response.text
+
+
 class SlackNotifier:
     def __init__(self):
         self.token = os.getenv("SLACK_BOT_TOKEN")
@@ -199,6 +215,8 @@ class Application:
             self.ai_client = OpenAIChatClient()
         elif ai_engine == "cohere":
             self.ai_client = CohereChatClient()
+        elif ai_engine == "gemini":
+            self.ai_client = GeminiChatClient()
         else:
             raise ValueError(f"Unsupported AI engine: {ai_engine}")
         self.reddit_client = RedditClient()
