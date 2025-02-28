@@ -166,6 +166,7 @@ class CohereChatClient(AIClient):
             message="指示に従って要約してください",
             temperature=1.0,
         )
+        print(response)
         return response.text
 
 
@@ -181,6 +182,7 @@ class GeminiChatClient(AIClient):
         messages = self.build_messages(subreddit, text)
         plain_prompt = " ".join([msg["content"] for msg in messages])
         response = self.model.generate_content(plain_prompt)
+        print(response)
         return response.text
 
 
