@@ -85,29 +85,20 @@ jobs:
             echo "slack_channel=" >> $GITHUB_OUTPUT
             exit 0
           fi
-
           echo "Selected subreddit: $SUBREDDIT"
 
           # 4) Subreddit に対応する Slack チャンネルを判定
-          #    例として SubredditA → SLACK_CHANNEL_A などに切り替える想定
-          SLACK_CHANNEL=""
-          echo "Subreddit: $SUBREDDIT"
-          case "$SUBREDDIT" in
-            "SubredditA")
-              echo "selected A channel"
+          case "$TIME_SLOT" in
+            "A")
               SLACK_CHANNEL="${{ env.SLACK_CHANNEL_A }}"
               ;;
-            "SubredditB")
-              echo "selected B channel"
+            "B")
               SLACK_CHANNEL="${{ env.SLACK_CHANNEL_B }}"
               ;;
-            "SubredditC")
-              echo "selected C channel"
+            "C")
               SLACK_CHANNEL="${{ env.SLACK_CHANNEL_C }}"
               ;;
             *)
-              # いずれにも当てはまらない場合はデフォルト
-              echo "selected default channel"
               SLACK_CHANNEL="${{ env.SLACK_CHANNEL_DEFAULT }}"
               ;;
           esac
