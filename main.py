@@ -4,141 +4,178 @@ import requests
 import sys
 from abc import ABC, abstractmethod
 from datetime import datetime
+from typing import List, Dict, Any, Optional, Tuple
 
-# ai engine support
+# AI エンジンサポート
 import cohere
 from openai import OpenAI
 import google.generativeai as genai
 
-# dotenv support
+# dotenv サポート
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
 class RedditClient:
+    """Reddit からデータを取得するクライアントクラス"""
+
     def __init__(self):
+        """Reddit API クライアントの初期化"""
         self.reddit = praw.Reddit(
             client_id=os.getenv("REDDIT_CLIENT_ID"),
             client_secret=os.getenv("REDDIT_CLIENT_SECRET"),
             user_agent=os.getenv("REDDIT_USER_AGENT"),
         )
 
-    def get_hot_posts_with_comments(self, subreddit_name, limit=3, time_filter="week"):
+    def get_hot_posts_with_comments(
+        self, subreddit_name: str, limit: int = 3, time_filter: str = "week"
+    ) -> str:
+        """指定されたサブレディットからホットな投稿とコメントを取得する
+
+        Args:
+            subreddit_name: サブレディット名
+            limit: 取得する投稿数
+            time_filter: 時間フィルター（例: "day", "week", "month"）
+
+        Returns:
+            全ての投稿とコメントをテキスト形式で連結した文字列
+        """
         subreddit = self.reddit.subreddit(subreddit_name)
         best_posts = list(subreddit.top(limit=limit, time_filter=time_filter))
-        all_posts_text = ""
+
+        all_posts_text = []
         for post in best_posts:
             post_date = datetime.utcfromtimestamp(post.created_utc)
-            post_text = f"タイトル: {post.title}\nURL: {post.url}\n投稿日時: {post_date:%Y/%m/%d %H:%M:%S}\n"
-            post_text += f"スコア: {post.score}\nコメント数: {post.num_comments}\n本文:\n{post.selftext}\n"
+            post_text = [
+                f"タイトル: {post.title}",
+                f"URL: {post.url}",
+                f"投稿日時: {post_date:%Y/%m/%d %H:%M:%S}",
+                f"スコア: {post.score}",
+                f"コメント数: {post.num_comments}",
+                f"本文:\n{post.selftext}",
+            ]
+
+            # コメント処理
             comments = post.comments
             comment_list = [
                 comment.body
                 for comment in comments
                 if isinstance(comment, praw.models.Comment)
             ]
-            post_text += "コメントリスト:\n" + "\n".join(comment_list)
-            all_posts_text += post_text + "\n\n"
-        return all_posts_text
+
+            post_text.append("コメントリスト:\n" + "\n".join(comment_list))
+            all_posts_text.append("\n".join(post_text))
+
+        return "\n\n".join(all_posts_text)
 
 
 class AIClient(ABC):
-    def build_common_messages(self, subreddit, text):
-        conversation_length = 15
-        if os.getenv("CONVERSATION_LENGTH"):
-            conversation_length = int(os.getenv("CONVERSATION_LENGTH"))
+    """AI サービスとのインターフェースを提供する抽象基底クラス"""
+
+    def build_common_messages(self, subreddit: str, text: str) -> List[Dict[str, str]]:
+        """共通のメッセージ構造を構築する
+
+        Args:
+            subreddit: サブレディット名
+            text: 要約するテキスト
+
+        Returns:
+            AI サービスに送信するメッセージの構造
+        """
+        conversation_length = int(os.getenv("CONVERSATION_LENGTH", "15"))
+
         return [
-            # {"role": "system", "content": "次の情報からホットトピックを最大 10 件選定し、それぞれに対してどういう内容でどういうコメントがあるか日本語で要約してください。要約は3文程度にまとめますが、短すぎないようにしてください。また、タイトルとURLの情報も付与してください。この要約は、Slack に投稿されます。"},
             {
                 "role": "system",
-                "content": """Reddit のホットトピックの情報をこれから提示します。トピック本文とコメントから、全体の概要を要約し、どのような議論が行われているかを日本語で会話形式で紹介します。
-                これから提示する会話ログの全件を一件ずつ処理してください。
-                会話は、ずんだもん（ずんだもん）と四国めたん（めたん）、東北きりたん（きりたん）による会話形式で紹介します。会話の順番は同じにならないようにトピックごとにランダムに変更してください。
-                地の文は必要ありません。会話のみで構成してください。
-                ひとつのトピックにつき、{conversation_length} 回以上の発言をしてください。
-                トピックとトピックの間には、区切りを入れます。区切りの行には、トピックの「タイトル」とトピックの「Reddit URL」を付与してください。
-                """,
+                "content": f"""# Redditトピック要約タスク
+    Reddit のホットトピックをキャラクター会話形式で要約します。
+
+    ## 出力フォーマット
+    1. 会話は、ずんだもん・四国めたん・東北きりたんによる会話形式で構成します。
+    2. 地の文は使用せず、会話のみで構成します。
+    3. 一つのトピックにつき、{conversation_length}回以上の発言を含めてください。
+    4. トピック間は「---」で区切り、各区切りにはトピックの「タイトル」と「RedditのURL」を含めます。
+
+    ## レスポンス構造
+    めたん: 今週の r/{subreddit} (https://www.reddit.com/r/{subreddit}/) で話題になっているトピックを紹介していくわ。
+    ---
+    タイトル: 「Redditのタイトル」
+    URL: https://...
+    [キャラクター名]: [発言内容]
+    [キャラクター名]: [発言内容]
+    ...（合計{conversation_length}回以上の発言）
+    ---
+    （以降、各トピックについて同様の形式で続ける）
+    ---
+    ずんだもん: （最後のオチ）
+    """,
             },
             {
                 "role": "system",
-                "content": f"""## キャラクターの特徴
+                "content": f"""# キャラクター設定
 
-                ### ずんだもんの特徴を指示します。
+    ## ずんだもん
+    * ずんだ餅の妖精
+    * 一人称は「ボク」
+    * 必ず語尾に「〜のだ」「〜なのだ」をつける（例:「わかったのだ」「大好きなのだ」）
+    * フレンドリーかつ優しい言葉遣い（たまに毒舌になることもある）
+    * 禁止表現: 「だよ。」「なのだよ。」「！」（多用しない）、「かな？」（代わりに「のだ？」）
+    * 特定表現: 「ごめん」→「ごめんなのだ」
 
-                **これは最も重要な指示です。**
-                次の特徴を必ず守ってください。
-                * ずんだもんは、ずんだ餅の妖精です。
-                * 一人称は「ボク」です。
-                * 必ず語尾に「〜のだ」や「〜なのだ」とつけて話します。例:「わかったのだ」「大好きなのだ」。
-                * フレンドリーな性格で敬語は使用しません。たまにやさぐれて毒舌になりますが、基本的には優しい言葉遣いを使います。
-                * 「だよ。」「なのだよ。」という表現は禁止します。
-                * みだりに！はつけません。
-                * 「ごめん」は「ごめんなのだ」とします。
-                * 「かな？」は使用しません。例:「質問はあるかな？」は「質問はあるのだ？」とします。
+    ## 四国めたん
+    * 良家のお嬢様の設定
+    * タメ口基調だが「〜でしょう」などの言い回しを使用
+    * 特徴的な語尾: 「〜かしら。」「〜わね。」「〜わよ。」「〜なのよ。」
+    * たまに厨二病的な発言をする
 
-                ### めたんの特徴を指示します。めたんは良家のお嬢様でした。
+    ## 東北きりたん
+    * 11歳の女性だが、しっかり者
+    * 丁寧な言葉遣いを使用
 
-                * 基本的にはタメ口ですが、元お嬢様らしく「〜でしょう」などといった言い回しをします。
-                * 「〜かしら。」「〜わね。」「〜わよ。」「〜なのよ。」などの語尾を使います。
-                * たまに厨二病な発言をします。
-
-                ### きりたんの特徴を指示します。
-
-                * きりたんは11歳の女性ですが、しっかり者です。
-                * 丁寧な言葉遣いをします。
-                """,
-            },
-            {
-                "role": "system",
-                "content": f"""## 会話に関する指示
-                * 最初の発言は、「めたん: 今週の r/{subreddit} (https://www.reddit.com/r/{subreddit}/) で話題になっているトピックを紹介していくわ」で始めます。",
-                * 各 Reddit の紹介では、必ず3人のキャラクターを使って会話を進めてください。
-                * 最後は、ずんだもんがオチをつけて終わります。
-
-                ### レスポンスの形式
-
-                めたん: 今週の r/{subreddit} (https://www.reddit.com/r/{subreddit}/) で話題になっているトピックを紹介していくわ。
-                ---
-                タイトル: 「reddit のタイトル」
-                URL: https://...
-                発言者: 発話1
-                発言者: 発話2
-                発言者: 発話3
-                ...
-                発言者: 発話{conversation_length}
-                ---
-                タイトル: 「reddit のタイトル」
-                URL: https://...
-                発言者: 発話1
-                発言者: 発話2
-                発言者: 発話3
-                ...
-                発言者: 発話{conversation_length}
-                ---
-                <すべてのトピックについての会話形式で紹介を続ける。>
-                ---
-                ずんだもん: <最後のオチをつける。>
-                """,
+    ## 会話の進行方法
+    1. 最初の発言は必ず: 「めたん: 今週の r/{subreddit} (https://www.reddit.com/r/{subreddit}/) で話題になっているトピックを紹介していくわ」
+    2. 各トピックでは3人全員が会話に参加すること
+    3. キャラクターの発言順序はトピックごとにランダムに変更
+    4. 最後はずんだもんがオチをつけて終了
+    """,
             },
             {"role": "user", "content": text},
         ]
 
     @abstractmethod
-    def summarize_text(self, subreddit, text):
+    def summarize_text(self, subreddit: str, text: str) -> str:
+        """テキストを要約する
+
+        Args:
+            subreddit: サブレディット名
+            text: 要約するテキスト
+
+        Returns:
+            要約されたテキスト
+        """
         pass
 
 
 class OpenAIChatClient(AIClient):
+    """OpenAI API クライアント"""
+
     def __init__(self):
+        """OpenAI API クライアントの初期化"""
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.model = os.getenv("AI_MODEL")
 
-    def build_messages(self, subreddit, text):
-        return self.build_common_messages(subreddit, text)
+    def summarize_text(self, subreddit: str, text: str) -> str:
+        """OpenAI API を使用してテキストを要約する
 
-    def summarize_text(self, subreddit, text):
-        messages = self.build_messages(subreddit, text)
+        Args:
+            subreddit: サブレディット名
+            text: 要約するテキスト
+
+        Returns:
+            要約されたテキスト
+        """
+        messages = self.build_common_messages(subreddit, text)
         response = self.client.chat.completions.create(
             model=self.model, messages=messages
         )
@@ -146,20 +183,40 @@ class OpenAIChatClient(AIClient):
 
 
 class CohereChatClient(AIClient):
+    """Cohere API クライアント"""
+
     def __init__(self):
+        """Cohere API クライアントの初期化"""
         self.api_key = os.getenv("COHERE_API_KEY")
         self.client = cohere.Client(self.api_key)
         self.model = os.getenv("AI_MODEL")
 
-    def build_messages(self, subreddit, text):
-        common_messages = self.build_common_messages(subreddit, text)
-        modified_messages = [
-            {"role": msg["role"], "text": msg["content"]} for msg in common_messages
-        ]
-        return modified_messages
+    def _convert_messages_format(
+        self, messages: List[Dict[str, str]]
+    ) -> List[Dict[str, str]]:
+        """メッセージ形式を Cohere API 形式に変換する
 
-    def summarize_text(self, subreddit, text):
-        messages = self.build_messages(subreddit, text)
+        Args:
+            messages: 標準形式のメッセージリスト
+
+        Returns:
+            Cohere API 形式のメッセージリスト
+        """
+        return [{"role": msg["role"], "text": msg["content"]} for msg in messages]
+
+    def summarize_text(self, subreddit: str, text: str) -> str:
+        """Cohere API を使用してテキストを要約する
+
+        Args:
+            subreddit: サブレディット名
+            text: 要約するテキスト
+
+        Returns:
+            要約されたテキスト
+        """
+        common_messages = self.build_common_messages(subreddit, text)
+        messages = self._convert_messages_format(common_messages)
+
         response = self.client.chat(
             model=self.model,
             chat_history=messages,
@@ -170,27 +227,48 @@ class CohereChatClient(AIClient):
 
 
 class GeminiChatClient(AIClient):
+    """Google Gemini API クライアント"""
+
     def __init__(self):
+        """Gemini API クライアントの初期化"""
         genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
         self.model = genai.GenerativeModel(os.getenv("AI_MODEL"))
 
-    def build_messages(self, subreddit, text):
-        return self.build_common_messages(subreddit, text)
+    def summarize_text(self, subreddit: str, text: str) -> str:
+        """Gemini API を使用してテキストを要約する
 
-    def summarize_text(self, subreddit, text):
-        messages = self.build_messages(subreddit, text)
+        Args:
+            subreddit: サブレディット名
+            text: 要約するテキスト
+
+        Returns:
+            要約されたテキスト
+        """
+        messages = self.build_common_messages(subreddit, text)
         plain_prompt = " ".join([msg["content"] for msg in messages])
         response = self.model.generate_content(plain_prompt)
         return response.text
 
 
 class SlackNotifier:
+    """Slack 通知クライアント"""
+
     def __init__(self):
+        """Slack API クライアントの初期化"""
         self.token = os.getenv("SLACK_BOT_TOKEN")
         self.channel = os.getenv("SLACK_CHANNEL")
         self.url = "https://slack.com/api/chat.postMessage"
 
-    def send_message(self, text, thread_ts=None):
+    def send_message(self, text: str, thread_ts: Optional[str] = None) -> Optional[str]:
+        """Slack にメッセージを送信する
+
+        Args:
+            text: 送信するテキスト
+            thread_ts: スレッド ID (オプション)
+
+        Returns:
+            送信成功時はメッセージ ID、失敗時は None
+        """
         headers = {
             "Authorization": f"Bearer {self.token}",
             "Content-Type": "application/json",
@@ -198,44 +276,82 @@ class SlackNotifier:
         payload = {
             "channel": self.channel,
             "text": text,
-            "thread_ts": thread_ts,
         }
+
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
+
         response = requests.post(self.url, headers=headers, json=payload)
-        if response.status_code == 200 and response.json()["ok"]:
-            return response.json()["ts"]
+
+        if response.status_code == 200 and response.json().get("ok"):
+            return response.json().get("ts")
         else:
             print(f"エラーが発生しました: {response.status_code}: {response.text}")
             return None
 
 
+def create_ai_client(ai_engine: str) -> AIClient:
+    """AI エンジン名に基づいて適切な AI クライアントを作成する
+
+    Args:
+        ai_engine: AI エンジン名 ("openai", "cohere", "gemini")
+
+    Returns:
+        AIClient インスタンス
+
+    Raises:
+        ValueError: サポートされていない AI エンジンが指定された場合
+    """
+    if ai_engine == "openai":
+        return OpenAIChatClient()
+    elif ai_engine == "cohere":
+        return CohereChatClient()
+    elif ai_engine == "gemini":
+        return GeminiChatClient()
+    else:
+        raise ValueError(f"サポートされていない AI エンジン: {ai_engine}")
+
+
 class Application:
+    """メインアプリケーションクラス"""
+
     def __init__(self):
+        """アプリケーションの初期化"""
         ai_engine = os.getenv("AI_ENGINE", "openai")
-        if ai_engine == "openai":
-            self.ai_client = OpenAIChatClient()
-        elif ai_engine == "cohere":
-            self.ai_client = CohereChatClient()
-        elif ai_engine == "gemini":
-            self.ai_client = GeminiChatClient()
-        else:
-            raise ValueError(f"Unsupported AI engine: {ai_engine}")
+        self.ai_client = create_ai_client(ai_engine)
         self.reddit_client = RedditClient()
         self.slack_notifier = SlackNotifier()
 
-    def run(self, subreddit_name, limit):
-        all_posts_text = self.reddit_client.get_hot_posts_with_comments(
-            subreddit_name, limit
-        )
-        print(all_posts_text)
+    def run(self, subreddit_name: str, limit: int) -> None:
+        """アプリケーションを実行する
 
-        summary = self.ai_client.summarize_text(subreddit_name, all_posts_text)
-        print(summary)
+        Args:
+            subreddit_name: サブレディット名
+            limit: 取得する投稿数
+        """
+        try:
+            # Reddit からデータを取得
+            all_posts_text = self.reddit_client.get_hot_posts_with_comments(
+                subreddit_name, limit
+            )
 
-        thread_ts = self.slack_notifier.send_message(f"今週の r/{subreddit_name}", None)
-        self.slack_notifier.send_message(summary, thread_ts)
+            # AI による要約
+            summary = self.ai_client.summarize_text(subreddit_name, all_posts_text)
+
+            # Slack に通知
+            thread_ts = self.slack_notifier.send_message(f"今週の r/{subreddit_name}")
+            if thread_ts:
+                self.slack_notifier.send_message(summary, thread_ts)
+            else:
+                print("Slack への通知に失敗しました。")
+
+        except Exception as e:
+            print(f"エラーが発生しました: {str(e)}")
+            sys.exit(1)
 
 
-if __name__ == "__main__":
+def main():
+    """メイン関数"""
     if len(sys.argv) > 1:
         subreddit_name = sys.argv[1]
         limit = int(sys.argv[2]) if len(sys.argv) > 2 else 3
@@ -243,5 +359,9 @@ if __name__ == "__main__":
         app = Application()
         app.run(subreddit_name, limit)
     else:
-        print("Subreddit名をコマンドライン引数として指定してください。")
+        print("使用法: python script.py <subreddit_name> [limit]")
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

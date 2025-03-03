@@ -1,43 +1,14 @@
-name: Reddit Summarizer Scheduler
+name: Reddit Summarizer Unified
 
 on:
   schedule:
     - cron: "0 * * * *"
-
   workflow_dispatch:
 
 jobs:
-  check-report-times:
+  reddit-summarizer:
     runs-on: ubuntu-latest
-    outputs:
-      should-run: ${{ steps.check_times.outputs.should-run }}
-    steps:
-      - name: Determine if report times are set and match current time
-        id: check_times
-        run: |
-          CURRENT_HOUR=$(date -u +'%-H')
-          echo "current hour: $CURRENT_HOUR"
-          echo "REPORT_TIME_MORNING_UTC: $REPORT_TIME_MORNING_UTC"
-          echo "REPORT_TIME_EVENING_UTC: $REPORT_TIME_EVENING_UTC"
 
-          if [ -z "${{ env.REPORT_TIME_MORNING_UTC }}" ] && [ -z "${{ env.REPORT_TIME_EVENING_UTC }}" ]; then
-            echo "Report times are not set."
-            echo "should-run=false" >> $GITHUB_OUTPUT
-          elif [ "$CURRENT_HOUR" != "${{ env.REPORT_TIME_MORNING_UTC }}" ] && [ "$CURRENT_HOUR" != "${{ env.REPORT_TIME_EVENING_UTC }}" ]; then
-            echo "Current time does not match report times."
-            echo "should-run=false" >> $GITHUB_OUTPUT
-          else
-            echo "Report times are set and match current time."
-            echo "should-run=true" >> $GITHUB_OUTPUT
-          fi
-        env:
-          REPORT_TIME_MORNING_UTC: ${{ vars.REPORT_TIME_MORNING_UTC }}
-          REPORT_TIME_EVENING_UTC: ${{ vars.REPORT_TIME_EVENING_UTC }}
-
-  post-subreddit-info:
-    runs-on: ubuntu-latest
-    needs: check-report-times
-    if: needs.check-report-times.outputs.should-run == 'true'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -52,34 +23,134 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Determine subreddit based on day of the week and time
+      - name: Determine time slot, subreddit and Slack channel
+        id: determine-settings
         run: |
-          HOUR=$(date +%-H)
-          DAY_NUM=$(date +%u)
-          if [ "$HOUR" -eq "${{ env.REPORT_TIME_MORNING_UTC }}" ]; then
-            IFS=' ' read -r -a SUBREDDITS <<< "$SUBREDDITS_MORNING"
-          elif [ "$HOUR" -eq "${{ env.REPORT_TIME_EVENING_UTC }}" ]; then
-            IFS=' ' read -r -a SUBREDDITS <<< "$SUBREDDITS_EVENING"
+          # 現在の UTC 時刻と曜日を取得
+          CURRENT_HOUR=$(date -u +%-H)
+          DAY_NUM=$(date -u +%u)  # 1=Mon, 7=Sun
+          echo "Current hour (UTC): $CURRENT_HOUR"
+          echo "Day of the week (1=Mon, 7=Sun): $DAY_NUM"
+
+          # 1) A / B / C どの時間帯かを判定
+          TIME_SLOT=""
+          if [ "$CURRENT_HOUR" -eq "${{ env.REPORT_TIME_A_UTC }}" ]; then
+            TIME_SLOT="A"
+          elif [ "$CURRENT_HOUR" -eq "${{ env.REPORT_TIME_B_UTC }}" ]; then
+            TIME_SLOT="B"
+          elif [ "$CURRENT_HOUR" -eq "${{ env.REPORT_TIME_C_UTC }}" ]; then
+            TIME_SLOT="C"
           else
-            SUBREDDITS=("Tokyo" "Tokyo" "Tokyo" "Tokyo" "Tokyo" "Tokyo" "Tokyo")
+            echo "No matching time slot (A/B/C). Skipping..."
+            echo "subreddit=" >> $GITHUB_OUTPUT
+            echo "slack_channel=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "Matched time slot: $TIME_SLOT"
+
+          # 2) 時間帯に応じた Subreddit 配列を選択
+          case "$TIME_SLOT" in
+            "A")
+              IFS=' ' read -r -a SUBREDDITS <<< "${{ env.SUBREDDITS_A }}"
+              ;;
+            "B")
+              IFS=' ' read -r -a SUBREDDITS <<< "${{ env.SUBREDDITS_B }}"
+              ;;
+            "C")
+              IFS=' ' read -r -a SUBREDDITS <<< "${{ env.SUBREDDITS_C }}"
+              ;;
+            *)
+              echo "Unknown slot. Skipping..."
+              echo "subreddit=" >> $GITHUB_OUTPUT
+              echo "slack_channel=" >> $GITHUB_OUTPUT
+              exit 0
+              ;;
+          esac
+
+          # 3) 曜日 (DAY_NUM) に対応する Subreddit を取得
+          #    配列要素数と DAY_NUM をチェックし、要素がない・空文字ならスキップ
+          len="${#SUBREDDITS[@]}"
+          if [ "$DAY_NUM" -gt "$len" ]; then
+            echo "No subreddit set for day $DAY_NUM. Skipping..."
+            echo "subreddit=" >> $GITHUB_OUTPUT
+            echo "slack_channel=" >> $GITHUB_OUTPUT
+            exit 0
           fi
 
-          echo ${SUBREDDITS[*]}
           SUBREDDIT=${SUBREDDITS[$((DAY_NUM-1))]}
-          echo $SUBREDDIT
-          echo "SUBREDDIT=${SUBREDDIT}" >> $GITHUB_ENV
+          # もし土曜・日曜用が空なら SUBREDDIT が空文字になる可能性がある
+          if [ -z "$SUBREDDIT" ]; then
+            echo "Subreddit for day $DAY_NUM (Sat or Sun) is empty. Skipping..."
+            echo "subreddit=" >> $GITHUB_OUTPUT
+            echo "slack_channel=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "Selected subreddit: $SUBREDDIT"
+
+          # 4) Subreddit に対応する Slack チャンネルを判定
+          #    例として SubredditA → SLACK_CHANNEL_A などに切り替える想定
+          SLACK_CHANNEL=""
+          case "$SUBREDDIT" in
+            "SubredditA")
+              SLACK_CHANNEL="${{ env.SLACK_CHANNEL_A }}"
+              ;;
+            "SubredditB")
+              SLACK_CHANNEL="${{ env.SLACK_CHANNEL_B }}"
+              ;;
+            "SubredditC")
+              SLACK_CHANNEL="${{ env.SLACK_CHANNEL_C }}"
+              ;;
+            *)
+              # いずれにも当てはまらない場合はデフォルト
+              SLACK_CHANNEL="${{ env.SLACK_CHANNEL_DEFAULT }}"
+              ;;
+          esac
+
+          echo "Selected Slack channel: $SLACK_CHANNEL"
+
+          # 5) 後続ステップに渡すため、GITHUB_OUTPUT に書き込む
+          echo "subreddit=$SUBREDDIT" >> $GITHUB_OUTPUT
+          echo "slack_channel=$SLACK_CHANNEL" >> $GITHUB_OUTPUT
         env:
-          REPORT_TIME_MORNING_UTC: ${{ vars.REPORT_TIME_MORNING_UTC }}
-          REPORT_TIME_EVENING_UTC: ${{ vars.REPORT_TIME_EVENING_UTC }}
-          SUBREDDITS_MORNING: ${{ vars.SUBREDDITS_MORNING }}
-          SUBREDDITS_EVENING: ${{ vars.SUBREDDITS_EVENING }}
+          # ---- A/B/C の時刻 (UTC) ----
+          REPORT_TIME_A_UTC: ${{ vars.REPORT_TIME_A_UTC }}
+          REPORT_TIME_B_UTC: ${{ vars.REPORT_TIME_B_UTC }}
+          REPORT_TIME_C_UTC: ${{ vars.REPORT_TIME_C_UTC }}
+
+          # ---- Subreddit 配列 ----
+          SUBREDDITS_A: ${{ vars.SUBREDDITS_A }}
+          SUBREDDITS_B: ${{ vars.SUBREDDITS_B }}
+          SUBREDDITS_C: ${{ vars.SUBREDDITS_C }}
+
+          # ---- Slack チャンネル ----
+          SLACK_CHANNEL_A: ${{ vars.SLACK_CHANNEL_A }}
+          SLACK_CHANNEL_B: ${{ vars.SLACK_CHANNEL_B }}
+          SLACK_CHANNEL_C: ${{ vars.SLACK_CHANNEL_C }}
+          SLACK_CHANNEL_DEFAULT: ${{ vars.SLACK_CHANNEL_DEFAULT }}
 
       - name: Run script with subreddit
+        # スキップ判定: 上のステップで subreddit が空なら実行しない
+        if: steps.determine-settings.outputs.subreddit != ''
         run: |
-          echo $SUBREDDIT
-          echo $SUBREDDIT_TOPICS_NUMBER
-          python main.py $SUBREDDIT $SUBREDDIT_TOPICS_NUMBER
+          echo "Subreddit: $SUBREDDIT"
+          echo "Slack channel: $SLACK_CHANNEL"
+          echo "SUBREDDIT_TOPICS_NUMBER: $SUBREDDIT_TOPICS_NUMBER"
+
+          # 必要に応じて Slack チャンネルを main.py 引数で渡す例:
+          # python main.py "$SUBREDDIT" "$SUBREDDIT_TOPICS_NUMBER" --slack-channel "$SLACK_CHANNEL"
+
+          python main.py "$SUBREDDIT" "$SUBREDDIT_TOPICS_NUMBER"
         env:
+          SUBREDDIT: ${{ steps.determine-settings.outputs.subreddit }}
+          SLACK_CHANNEL: ${{ steps.determine-settings.outputs.slack_channel }}
+
+          SUBREDDIT_TOPICS_NUMBER: ${{ vars.SUBREDDIT_TOPICS_NUMBER }}
+          AI_ENGINE: ${{ vars.AI_ENGINE }}
+          AI_MODEL: ${{ vars.AI_MODEL }}
+          CONVERSATION_LENGTH: ${{ vars.CONVERSATION_LENGTH }}
+
+          # ここから下は Secrets 等
           COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
@@ -87,9 +158,3 @@ jobs:
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
           REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-
-          AI_ENGINE: ${{ vars.AI_ENGINE }}
-          AI_MODEL: ${{ vars.AI_MODEL }}
-          CONVERSATION_LENGTH: ${{ vars.CONVERSATION_LENGTH }}
-          SLACK_CHANNEL: ${{ vars.SLACK_CHANNEL }}
-          SUBREDDIT_TOPICS_NUMBER: ${{ vars.SUBREDDIT_TOPICS_NUMBER }}
