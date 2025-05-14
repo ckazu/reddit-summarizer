@@ -144,7 +144,7 @@ class AIClient(ABC):
         ]
 
     @abstractmethod
-    def summarize_text(self, subreddit: str, text: str) -> str:
+    def summarize_text(self, subreddit: str, text: str) -> Tuple[str, str]:
         """テキストを要約する
 
         Args:
@@ -152,7 +152,7 @@ class AIClient(ABC):
             text: 要約するテキスト
 
         Returns:
-            要約されたテキスト
+            (要約されたテキスト, モデル名)のタプル
         """
         pass
 
@@ -165,7 +165,7 @@ class OpenAIChatClient(AIClient):
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.model = os.getenv("AI_MODEL")
 
-    def summarize_text(self, subreddit: str, text: str) -> str:
+    def summarize_text(self, subreddit: str, text: str) -> Tuple[str, str]:
         """OpenAI API を使用してテキストを要約する
 
         Args:
@@ -173,13 +173,13 @@ class OpenAIChatClient(AIClient):
             text: 要約するテキスト
 
         Returns:
-            要約されたテキスト
+            (要約されたテキスト, モデル名)のタプル
         """
         messages = self.build_common_messages(subreddit, text)
         response = self.client.chat.completions.create(
             model=self.model, messages=messages
         )
-        return response.choices[0].message.content
+        return response.choices[0].message.content, self.model
 
 
 class CohereChatClient(AIClient):
@@ -204,7 +204,7 @@ class CohereChatClient(AIClient):
         """
         return [{"role": msg["role"], "text": msg["content"]} for msg in messages]
 
-    def summarize_text(self, subreddit: str, text: str) -> str:
+    def summarize_text(self, subreddit: str, text: str) -> Tuple[str, str]:
         """Cohere API を使用してテキストを要約する
 
         Args:
@@ -212,7 +212,7 @@ class CohereChatClient(AIClient):
             text: 要約するテキスト
 
         Returns:
-            要約されたテキスト
+            (要約されたテキスト, モデル名)のタプル
         """
         common_messages = self.build_common_messages(subreddit, text)
         messages = self._convert_messages_format(common_messages)
@@ -223,7 +223,7 @@ class CohereChatClient(AIClient):
             message="指示に従って要約してください",
             temperature=1.0,
         )
-        return response.text
+        return response.text, self.model
 
 
 class GeminiChatClient(AIClient):
@@ -233,8 +233,9 @@ class GeminiChatClient(AIClient):
         """Gemini API クライアントの初期化"""
         genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
         self.model = genai.GenerativeModel(os.getenv("AI_MODEL"))
+        self.model_name = os.getenv("AI_MODEL")
 
-    def summarize_text(self, subreddit: str, text: str) -> str:
+    def summarize_text(self, subreddit: str, text: str) -> Tuple[str, str]:
         """Gemini API を使用してテキストを要約する
 
         Args:
@@ -242,12 +243,12 @@ class GeminiChatClient(AIClient):
             text: 要約するテキスト
 
         Returns:
-            要約されたテキスト
+            (要約されたテキスト, モデル名)のタプル
         """
         messages = self.build_common_messages(subreddit, text)
         plain_prompt = " ".join([msg["content"] for msg in messages])
         response = self.model.generate_content(plain_prompt)
-        return response.text
+        return response.text, self.model_name
 
 
 class SlackNotifier:
@@ -336,12 +337,14 @@ class Application:
             )
 
             # AI による要約
-            summary = self.ai_client.summarize_text(subreddit_name, all_posts_text)
+            summary, model_name = self.ai_client.summarize_text(subreddit_name, all_posts_text)
 
             # Slack に通知
             thread_ts = self.slack_notifier.send_message(f"今週の r/{subreddit_name}")
             if thread_ts:
-                self.slack_notifier.send_message(summary, thread_ts)
+                # 要約テキストの最後にモデル名を追加
+                summary_with_model = f"{summary}\n\n使用モデル: {model_name}"
+                self.slack_notifier.send_message(summary_with_model, thread_ts)
             else:
                 print("Slack への通知に失敗しました。")
 
