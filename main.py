@@ -5,6 +5,7 @@ import sys
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
+from pydantic import BaseModel, Field
 
 # AI エンジンサポート
 import cohere
@@ -15,6 +16,18 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+class RedditSummary(BaseModel):
+    """Reddit要約のレスポンス構造"""
+    digest: List[str] = Field(
+        description="3行の要点まとめ",
+        min_items=3,
+        max_items=3
+    )
+    details: str = Field(
+        description="キャラクター会話形式の詳細内容"
+    )
 
 
 class RedditClient:
@@ -92,12 +105,20 @@ class AIClient(ABC):
     Reddit のホットトピックをキャラクター会話形式で要約します。
 
     ## 出力フォーマット
-    1. 会話は、ずんだもん・四国めたん・東北きりたんによる会話形式で構成します。
-    2. 地の文は使用せず、会話のみで構成します。
-    3. 一つのトピックにつき、{conversation_length}回以上の発言を含めてください。
-    4. トピック間は「---」で区切り、各区切りにはトピックの「タイトル」と「RedditのURL」を含めます。
+    1. 最初に「=== ダイジェスト ===」セクションで、3行の要点をまとめてください
+    2. その後「=== 詳細 ===」セクションで、会話形式の詳細を記載してください
+    3. 会話は、ずんだもん・四国めたん・東北きりたんによる会話形式で構成します
+    4. 地の文は使用せず、会話のみで構成します
+    5. 一つのトピックにつき、{conversation_length}回以上の発言を含めてください
+    6. トピック間は「---」で区切り、各区切りにはトピックの「タイトル」と「RedditのURL」を含めます
 
     ## レスポンス構造
+    === ダイジェスト ===
+    • [1つ目の重要ポイントや話題を1行で簡潔に]
+    • [2つ目の重要ポイントや話題を1行で簡潔に]
+    • [3つ目の重要ポイントや話題を1行で簡潔に]
+    
+    === 詳細 ===
     めたん: 今週の r/{subreddit} (https://www.reddit.com/r/{subreddit}/) で話題になっているトピックを紹介していくわ。
     ---
     タイトル: 「Redditのタイトル」
@@ -144,7 +165,7 @@ class AIClient(ABC):
         ]
 
     @abstractmethod
-    def summarize_text(self, subreddit: str, text: str) -> Tuple[str, str]:
+    def summarize_text(self, subreddit: str, text: str) -> Tuple[RedditSummary, str]:
         """テキストを要約する
 
         Args:
@@ -152,7 +173,7 @@ class AIClient(ABC):
             text: 要約するテキスト
 
         Returns:
-            (要約されたテキスト, モデル名)のタプル
+            (RedditSummary, モデル名)のタプル
         """
         pass
 
@@ -165,7 +186,7 @@ class OpenAIChatClient(AIClient):
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.model = os.getenv("AI_MODEL")
 
-    def summarize_text(self, subreddit: str, text: str) -> Tuple[str, str]:
+    def summarize_text(self, subreddit: str, text: str) -> Tuple[RedditSummary, str]:
         """OpenAI API を使用してテキストを要約する
 
         Args:
@@ -173,13 +194,63 @@ class OpenAIChatClient(AIClient):
             text: 要約するテキスト
 
         Returns:
-            (要約されたテキスト, モデル名)のタプル
+            (RedditSummary, モデル名)のタプル
         """
-        messages = self.build_common_messages(subreddit, text)
-        response = self.client.chat.completions.create(
-            model=self.model, messages=messages
-        )
-        return response.choices[0].message.content, self.model
+        conversation_length = int(os.getenv("CONVERSATION_LENGTH", "15"))
+
+        # Structured Outputs用のシステムメッセージ
+        system_message = f"""あなたはRedditのトピックを要約するアシスタントです。
+
+以下のキャラクターを使った会話形式で要約してください：
+- ずんだもん: 語尾に「〜のだ」「〜なのだ」をつける
+- 四国めたん: 「〜かしら」「〜わね」「〜わよ」の語尾を使う
+- 東北きりたん: 丁寧な言葉遣い
+
+詳細のフォーマット:
+めたん: 今週の r/{subreddit} (https://www.reddit.com/r/{subreddit}/) で話題になっているトピックを紹介していくわ。
+---
+タイトル: 「[Redditのタイトル]」
+URL: [URL]
+[キャラクター名]: [発言内容]
+（{conversation_length}回以上の発言）
+---
+（各トピックを同様に）
+---
+ずんだもん: [オチ]"""
+
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": text}
+        ]
+
+        # Structured Outputsを使用
+        try:
+            response = self.client.beta.chat.completions.parse(
+                model=self.model,
+                messages=messages,
+                response_format=RedditSummary,
+            )
+            return response.choices[0].message.parsed, self.model
+        except Exception as e:
+            # Structured Outputsがサポートされていない場合のフォールバック
+            print(f"Structured Output failed, falling back to JSON mode: {e}")
+
+            # JSONモードで再試行
+            json_messages = [
+                {"role": "system", "content": system_message + "\n\nJSON形式で返答してください: {\"digest\": [3つの要点], \"details\": \"詳細\"}"},
+                {"role": "user", "content": text}
+            ]
+
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=json_messages,
+                response_format={"type": "json_object"}
+            )
+
+            import json
+            content = response.choices[0].message.content
+            data = json.loads(content)
+            return RedditSummary(**data), self.model
 
 
 class CohereChatClient(AIClient):
@@ -204,7 +275,7 @@ class CohereChatClient(AIClient):
         """
         return [{"role": msg["role"], "text": msg["content"]} for msg in messages]
 
-    def summarize_text(self, subreddit: str, text: str) -> Tuple[str, str]:
+    def summarize_text(self, subreddit: str, text: str) -> Tuple[RedditSummary, str]:
         """Cohere API を使用してテキストを要約する
 
         Args:
@@ -212,18 +283,34 @@ class CohereChatClient(AIClient):
             text: 要約するテキスト
 
         Returns:
-            (要約されたテキスト, モデル名)のタプル
+            (RedditSummary, モデル名)のタプル
         """
+        import json
+
         common_messages = self.build_common_messages(subreddit, text)
+        # JSONレスポンスを要求するメッセージを追加
+        common_messages[-1]["content"] += "\n\nJSON形式で返答してください: {\"digest\": [「要点1」, 「要点2」, 「要点3」], \"details\": \"詳細内容\"}"
         messages = self._convert_messages_format(common_messages)
 
         response = self.client.chat(
             model=self.model,
             chat_history=messages,
-            message="指示に従って要約してください",
+            message="指示に従ってJSON形式で要約してください",
             temperature=1.0,
         )
-        return response.text, self.model
+
+        try:
+            data = json.loads(response.text)
+            return RedditSummary(**data), self.model
+        except:
+            # JSONパースに失敗した場合のフォールバック
+            return self._parse_text_response(response.text), self.model
+
+    def _parse_text_response(self, content: str) -> RedditSummary:
+        """テキストレスポンスをRedditSummaryにパース"""
+        digest = ["要約を生成中...", "要約を生成中...", "要約を生成中..."]
+        details = content
+        return RedditSummary(digest=digest, details=details)
 
 
 class GeminiChatClient(AIClient):
@@ -235,7 +322,7 @@ class GeminiChatClient(AIClient):
         self.model = genai.GenerativeModel(os.getenv("AI_MODEL"))
         self.model_name = os.getenv("AI_MODEL")
 
-    def summarize_text(self, subreddit: str, text: str) -> Tuple[str, str]:
+    def summarize_text(self, subreddit: str, text: str) -> Tuple[RedditSummary, str]:
         """Gemini API を使用してテキストを要約する
 
         Args:
@@ -243,12 +330,38 @@ class GeminiChatClient(AIClient):
             text: 要約するテキスト
 
         Returns:
-            (要約されたテキスト, モデル名)のタプル
+            (RedditSummary, モデル名)のタプル
         """
+        import json
+
         messages = self.build_common_messages(subreddit, text)
-        plain_prompt = " ".join([msg["content"] for msg in messages])
-        response = self.model.generate_content(plain_prompt)
-        return response.text, self.model_name
+        # JSONレスポンスを要求するプロンプトを追加
+        prompt_with_json = " ".join([msg["content"] for msg in messages])
+        prompt_with_json += "\n\nJSON形式で返答してください: {\"digest\": [「要点1」, 「要点2」, 「要点3」], \"details\": \"詳細内容\"}"
+
+        response = self.model.generate_content(prompt_with_json)
+
+        try:
+            # JSON部分を抽出してパース
+            text = response.text
+            # JSONブロックを探す
+            if '{' in text and '}' in text:
+                start = text.find('{')
+                end = text.rfind('}') + 1
+                json_str = text[start:end]
+                data = json.loads(json_str)
+                return RedditSummary(**data), self.model_name
+        except:
+            pass
+
+        # JSONパースに失敗した場合のフォールバック
+        return self._parse_text_response(response.text), self.model_name
+
+    def _parse_text_response(self, content: str) -> RedditSummary:
+        """テキストレスポンスをRedditSummaryにパース"""
+        digest = ["要約を生成中...", "要約を生成中...", "要約を生成中..."]
+        details = content
+        return RedditSummary(digest=digest, details=details)
 
 
 class SlackNotifier:
@@ -336,15 +449,20 @@ class Application:
                 subreddit_name, limit
             )
 
-            # AI による要約
-            summary, model_name = self.ai_client.summarize_text(subreddit_name, all_posts_text)
+            # AI による要約 (structured output)
+            summary_response, model_name = self.ai_client.summarize_text(subreddit_name, all_posts_text)
+
+            # ダイジェストを整形
+            digest_formatted = "\n".join([f"• {line}" for line in summary_response.digest])
 
             # Slack に通知
-            thread_ts = self.slack_notifier.send_message(f"今週の r/{subreddit_name}")
+            # 最初のメッセージにダイジェストを含める
+            first_message = f"📊 今週の r/{subreddit_name}\n\n{digest_formatted}"
+            thread_ts = self.slack_notifier.send_message(first_message)
             if thread_ts:
-                # 要約テキストの最後にモデル名を追加
-                summary_with_model = f"{summary}\n\n使用モデル: {model_name}"
-                self.slack_notifier.send_message(summary_with_model, thread_ts)
+                # 詳細とモデル名を追加
+                details_with_model = f"{summary_response.details}\n\n使用モデル: {model_name}"
+                self.slack_notifier.send_message(details_with_model, thread_ts)
             else:
                 print("Slack への通知に失敗しました。")
 
