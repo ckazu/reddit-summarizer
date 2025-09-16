@@ -143,6 +143,30 @@ class AIClient(ABC):
             {"role": "user", "content": text},
         ]
 
+    def build_three_line_summary_messages(
+        self, subreddit: str, text: str
+    ) -> List[Dict[str, str]]:
+        """三行まとめ用のメッセージ構造を構築する"""
+
+        return [
+            {
+                "role": "system",
+                "content": """# 三行まとめ作成タスク
+Redditのトピックを日本語で短くまとめます。
+
+## 出力ルール
+1. 出力は必ず3行とし、それぞれの行で重要なポイントを1つずつ説明すること。
+2. 各行の先頭には「・」を付けること。
+3. その他の説明や余計な文章は含めないこと。
+""",
+            },
+            {
+                "role": "system",
+                "content": f"対象サブレディット: r/{subreddit}",
+            },
+            {"role": "user", "content": text},
+        ]
+
     @abstractmethod
     def summarize_text(self, subreddit: str, text: str) -> Tuple[str, str]:
         """テキストを要約する
@@ -154,6 +178,11 @@ class AIClient(ABC):
         Returns:
             (要約されたテキスト, モデル名)のタプル
         """
+        pass
+
+    @abstractmethod
+    def summarize_to_three_lines(self, subreddit: str, text: str) -> Tuple[str, str]:
+        """テキストを三行で要約する"""
         pass
 
 
@@ -176,6 +205,14 @@ class OpenAIChatClient(AIClient):
             (要約されたテキスト, モデル名)のタプル
         """
         messages = self.build_common_messages(subreddit, text)
+        response = self.client.chat.completions.create(
+            model=self.model, messages=messages
+        )
+        return response.choices[0].message.content, self.model
+
+    def summarize_to_three_lines(self, subreddit: str, text: str) -> Tuple[str, str]:
+        """OpenAI API を使用して三行まとめを生成する"""
+        messages = self.build_three_line_summary_messages(subreddit, text)
         response = self.client.chat.completions.create(
             model=self.model, messages=messages
         )
@@ -225,6 +262,19 @@ class CohereChatClient(AIClient):
         )
         return response.text, self.model
 
+    def summarize_to_three_lines(self, subreddit: str, text: str) -> Tuple[str, str]:
+        """Cohere API を使用して三行まとめを生成する"""
+        messages = self.build_three_line_summary_messages(subreddit, text)
+        chat_history = self._convert_messages_format(messages)
+
+        response = self.client.chat(
+            model=self.model,
+            chat_history=chat_history,
+            message="指示に従って三行の要約を作成してください",
+            temperature=1.0,
+        )
+        return response.text, self.model
+
 
 class GeminiChatClient(AIClient):
     """Google Gemini API クライアント"""
@@ -246,6 +296,13 @@ class GeminiChatClient(AIClient):
             (要約されたテキスト, モデル名)のタプル
         """
         messages = self.build_common_messages(subreddit, text)
+        plain_prompt = " ".join([msg["content"] for msg in messages])
+        response = self.model.generate_content(plain_prompt)
+        return response.text, self.model_name
+
+    def summarize_to_three_lines(self, subreddit: str, text: str) -> Tuple[str, str]:
+        """Gemini API を使用して三行まとめを生成する"""
+        messages = self.build_three_line_summary_messages(subreddit, text)
         plain_prompt = " ".join([msg["content"] for msg in messages])
         response = self.model.generate_content(plain_prompt)
         return response.text, self.model_name
@@ -337,7 +394,12 @@ class Application:
             )
 
             # AI による要約
-            summary, model_name = self.ai_client.summarize_text(subreddit_name, all_posts_text)
+            summary, model_name = self.ai_client.summarize_text(
+                subreddit_name, all_posts_text
+            )
+            three_line_summary, three_line_model = self.ai_client.summarize_to_three_lines(
+                subreddit_name, all_posts_text
+            )
 
             # Slack に通知
             thread_ts = self.slack_notifier.send_message(f"今週の r/{subreddit_name}")
@@ -345,6 +407,23 @@ class Application:
                 # 要約テキストの最後にモデル名を追加
                 summary_with_model = f"{summary}\n\n使用モデル: {model_name}"
                 self.slack_notifier.send_message(summary_with_model, thread_ts)
+
+                if three_line_summary.strip():
+                    summary_lines = three_line_summary.strip().splitlines()
+                    if summary_lines:
+                        summary_lines[0] = f"三行まとめ: {summary_lines[0]}"
+                        three_line_message = "\n".join(summary_lines)
+                    else:
+                        three_line_message = "三行まとめ: 要約の生成に失敗しました。"
+                else:
+                    three_line_message = "三行まとめ: 要約の生成に失敗しました。"
+
+                if three_line_model != model_name:
+                    three_line_message = (
+                        f"{three_line_message}\n（使用モデル: {three_line_model}）"
+                    )
+
+                self.slack_notifier.send_message(three_line_message, thread_ts)
             else:
                 print("Slack への通知に失敗しました。")
 
