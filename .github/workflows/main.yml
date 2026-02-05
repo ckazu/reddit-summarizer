@@ -145,6 +145,7 @@ jobs:
           AI_ENGINE: ${{ vars.AI_ENGINE }}
           AI_MODEL: ${{ vars.AI_MODEL }}
           CONVERSATION_LENGTH: ${{ vars.CONVERSATION_LENGTH }}
+          SLACK_EMOJI_NAMES: ${{ vars.SLACK_EMOJI_NAMES }}
 
           # ここから下は Secrets 等
           COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
