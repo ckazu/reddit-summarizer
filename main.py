@@ -86,6 +86,43 @@ class RedditClient:
 class AIClient(ABC):
     """AI サービスとのインターフェースを提供する抽象基底クラス"""
 
+    EMOJI_MAP = {
+        "ずんだもん": ":zundamon:",
+        "めたん": ":shikoku-metan:",
+        "きりたん": ":tohoku-kiritan:",
+        "あんこもん": ":ankomon:",
+    }
+
+    @staticmethod
+    def _use_emoji_names() -> bool:
+        """環境変数 SLACK_EMOJI_NAMES が truthy かどうかを判定する"""
+        return os.getenv("SLACK_EMOJI_NAMES", "").lower() in ("true", "1", "yes")
+
+    def _speaker_label(self, name: str) -> str:
+        """発言者ラベルを返す
+
+        通常モード: 'ずんだもん:'
+        絵文字モード: ':zundamon:'
+        """
+        if self._use_emoji_names():
+            return self.EMOJI_MAP.get(name, name + ":")
+        return name + ":"
+
+    def _speaker_label_instruction(self) -> str:
+        """絵文字モード時の発言者ラベル指示を返す"""
+        if not self._use_emoji_names():
+            return ""
+        lines = "\n".join(
+            f"    * {name} → `{emoji}`"
+            for name, emoji in self.EMOJI_MAP.items()
+        )
+        return f"""
+    ## 発言者ラベルの表記ルール
+    会話の発言者ラベルには、キャラクター名ではなく以下の Slack 絵文字コードを使用してください:
+{lines}
+    例: `:zundamon: すごいのだ！`
+"""
+
     def build_common_messages(self, subreddit: str, text: str) -> List[Dict[str, str]]:
         """共通のメッセージ構造を構築する
 
@@ -97,6 +134,9 @@ class AIClient(ABC):
             AI サービスに送信するメッセージの構造
         """
         conversation_length = int(os.getenv("CONVERSATION_LENGTH", "15"))
+        metan = self._speaker_label("めたん")
+        zundamon = self._speaker_label("ずんだもん")
+        label_instruction = self._speaker_label_instruction()
 
         return [
             {
@@ -119,7 +159,7 @@ class AIClient(ABC):
     • [3つ目の重要ポイントや話題を1行で簡潔に]
     
     === 詳細 ===
-    めたん: 今週の r/{subreddit} (https://www.reddit.com/r/{subreddit}/) で話題になっているトピックを紹介していくわ。
+    {metan} 今週の r/{subreddit} (https://www.reddit.com/r/{subreddit}/) で話題になっているトピックを紹介していくわ。
     ---
     タイトル: 「Redditのタイトル」
     URL: https://...
@@ -129,7 +169,7 @@ class AIClient(ABC):
     ---
     （以降、各トピックについて同様の形式で続ける）
     ---
-    ずんだもん: （最後のオチ）
+    {zundamon} （最後のオチ）
     """,
             },
             {
@@ -166,11 +206,11 @@ class AIClient(ABC):
     * 推奨: 「〜には注意が必要だもん」「〜は慎重に見た方がいいもん」「〜という懸念もあるもん」
 
     ## 会話の進行方法
-    1. 最初の発言は必ず: 「めたん: 今週の r/{subreddit} (https://www.reddit.com/r/{subreddit}/) で話題になっているトピックを紹介していくわ」
+    1. 最初の発言は必ず: 「{metan} 今週の r/{subreddit} (https://www.reddit.com/r/{subreddit}/) で話題になっているトピックを紹介していくわ」
     2. 各トピックでは4人全員が会話に参加すること
     3. キャラクターの発言順序はトピックごとにランダムに変更
     4. 最後はずんだもんがオチをつけて終了
-    """,
+    {label_instruction}""",
             },
             {"role": "user", "content": text},
         ]
@@ -208,6 +248,9 @@ class OpenAIChatClient(AIClient):
             (RedditSummary, モデル名)のタプル
         """
         conversation_length = int(os.getenv("CONVERSATION_LENGTH", "15"))
+        metan = self._speaker_label("めたん")
+        zundamon = self._speaker_label("ずんだもん")
+        label_instruction = self._speaker_label_instruction()
 
         # Structured Outputs用のシステムメッセージ
         system_message = f"""あなたはRedditのトピックを要約するアシスタントです。
@@ -219,7 +262,7 @@ class OpenAIChatClient(AIClient):
 - あんこもん: 語尾に「〜もん」「〜だもん」をつける。一人称は「あんこもん」。現実的・慎重な視点で建設的な批判をする
 
 詳細のフォーマット:
-めたん: 今週の r/{subreddit} (https://www.reddit.com/r/{subreddit}/) で話題になっているトピックを紹介していくわ。
+{metan} 今週の r/{subreddit} (https://www.reddit.com/r/{subreddit}/) で話題になっているトピックを紹介していくわ。
 ---
 タイトル: 「[Redditのタイトル]」
 URL: [URL]
@@ -228,7 +271,7 @@ URL: [URL]
 ---
 （各トピックを同様に）
 ---
-ずんだもん: [オチ]"""
+{zundamon} [オチ]{label_instruction}"""
 
         messages = [
             {"role": "system", "content": system_message},
