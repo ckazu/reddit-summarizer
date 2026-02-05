@@ -3,7 +3,7 @@ import praw
 import requests
 import sys
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
 from pydantic import BaseModel, Field
 
@@ -59,7 +59,7 @@ class RedditClient:
 
         all_posts_text = []
         for post in best_posts:
-            post_date = datetime.utcfromtimestamp(post.created_utc)
+            post_date = datetime.fromtimestamp(post.created_utc, tz=timezone.utc)
             post_text = [
                 f"タイトル: {post.title}",
                 f"URL: {post.url}",
@@ -252,7 +252,6 @@ class OpenAIChatClient(AIClient):
         zundamon = self._speaker_label("ずんだもん")
         label_instruction = self._speaker_label_instruction()
 
-        # Structured Outputs用のシステムメッセージ
         system_message = f"""あなたはRedditのトピックを要約するアシスタントです。
 
 以下のキャラクターを使った会話形式で要約してください：
@@ -271,41 +270,26 @@ URL: [URL]
 ---
 （各トピックを同様に）
 ---
-{zundamon} [オチ]{label_instruction}"""
+{zundamon} [オチ]{label_instruction}
+
+JSON形式で返答してください: {{"digest": [3つの要点], "details": "詳細"}}"""
 
         messages = [
             {"role": "system", "content": system_message},
             {"role": "user", "content": text}
         ]
 
-        # Structured Outputsを使用
-        try:
-            response = self.client.beta.chat.completions.parse(
-                model=self.model,
-                messages=messages,
-                response_format=RedditSummary,
-            )
-            return response.choices[0].message.parsed, self.model
-        except Exception as e:
-            # Structured Outputsがサポートされていない場合のフォールバック
-            print(f"Structured Output failed, falling back to JSON mode: {e}")
+        import json
 
-            # JSONモードで再試行
-            json_messages = [
-                {"role": "system", "content": system_message + "\n\nJSON形式で返答してください: {\"digest\": [3つの要点], \"details\": \"詳細\"}"},
-                {"role": "user", "content": text}
-            ]
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            response_format={"type": "json_object"}
+        )
 
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=json_messages,
-                response_format={"type": "json_object"}
-            )
-
-            import json
-            content = response.choices[0].message.content
-            data = json.loads(content)
-            return RedditSummary(**data), self.model
+        content = response.choices[0].message.content
+        data = json.loads(content)
+        return RedditSummary(**data), self.model
 
 
 class CohereChatClient(AIClient):
